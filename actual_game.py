@@ -3,21 +3,23 @@ import torch
 from collections import deque, namedtuple
 import torch.nn as nn
 import torch.optim as optim
+import random
 class FLOW:
-    def __init__(self,grid_size,grid_colors,grid_rows,grid_cols,color_points,max_steps=200):
+    def __init__(self,grid_size,colors,color_points,max_steps=200):
             self.size = grid_size
-            self.colors = grid_colors
+            self.colors = colors
+            self.num_colors= len(colors)
             self.color_points = color_points
-            self.rows = grid_rows
-            self.cols = grid_cols
-            self.area = self.grid_rows * self.grid_cols
+            self.rows = grid_size
+            self.cols = grid_size
+            self.area = self.rows * self.cols
             self.action_space = self.area * len(self.colors)
             self.max_steps = max_steps
             self.reset()
 
     def reset(self):
         self.grid=np.array
-        self.grid = np.zeros((self.grid_h, self.grid_w), dtype=np.int8)         
+        self.grid = np.zeros((self.rows, self.cols), dtype=np.int8)         
         for i in self.color_points:
             self.grid[i[1][0]][i[1][1]]=i[0]*-1            #color_points = [[color,[start_x,start_y],[end_x,end_y]]]
         for i in self.color_points:
@@ -30,27 +32,35 @@ class FLOW:
 
 
     def step(self, action):
-        x, y,color = self.decode_action(action)
+        x, y,color_idx = self.decode_action(action)
+        color = colors[color_idx]
         self.steps += 1
         reward = 0.0
         done = False
         info = {}
-        if self.grid[y,x]==(color*-1):                                  #FIXED POINT OVERWRITE ATTEMPT
+        count=0
+        if self.grid[y,x] < 0:                                  #FIXED POINT OVERWRITE ATTEMPT
             reward = -5.0
+            print("OVERWRITE FIXED")
                 
-        if self.grid[y, x] == color:                                    #REPEATED PLACEMENT
+        elif self.grid[y, x] == color:                                    #REPEATED PLACEMENT
             reward = -0.2
+            print("REPEAT")
             
         elif self.grid[y, x] == 0:                                      #VALID
             self.grid[y, x] = color
-            reward = 1.0
+            reward = 2.0
+            print("VALID")
             
         else:                                                           #OVERWRITE DOT
             self.grid[y, x] = color
             reward = -3.0
+            print("OVERWRITE DOT")
+        print(y,x,color)
+        print(self.grid)
 
-        for i in  colors:
-            if self.checkConnect(i,dotStart[i],False)==True:
+        for i in  self.color_points:
+            if self.checkConnect(i[0],i[1],False)==True:
                 count+=1
                 
         if count==len(colors):                                          #REWARD FOR FULL SOLUTION
@@ -73,7 +83,7 @@ class FLOW:
     def get_observation(self):
         # Return C x H x W float32; channel c has 1 where color c+1 is present
         abs_grid = np.abs(self.grid)
-        obs = np.zeros((self.num_colors, self.grid_rows, self.grid_cols), dtype=np.float32)
+        obs = np.zeros((self.num_colors, self.rows, self.cols), dtype=np.float32)
         for c in range(self.num_colors):
             obs[c] = (abs_grid == (c + 1)).astype(np.float32)
         return obs
@@ -85,51 +95,50 @@ class FLOW:
             
         if flag==False and current[0]>0 and [current[0]-1,current[1]] not in visited:      #UP
             visited.append(current)
-            if grid[current[0]-1][current[1]]==color*-1:
+            if self.grid[current[0]-1][current[1]]==color*-1:
                 flag=True
                 return flag
-            elif grid[current[0]-1][current[1]]==color:
+            elif self.grid[current[0]-1][current[1]]==color:
                 current=[current[0]-1,current[1]]
-                flag=checkConnect(color,current,flag,visited)
+                flag=self.checkConnect(color,current,flag,visited)
             
                 
         if flag==False and current[0]<(self.rows-1) and [current[0]+1,current[1]] not in visited:     #DOWN
             visited.append(current)
-            if grid[current[0]+1][current[1]]==color*-1:
+            if self.grid[current[0]+1][current[1]]==color*-1:
                 flag=True
                 return flag            
-            elif grid[current[0]+1][current[1]]==color:
+            elif self.grid[current[0]+1][current[1]]==color:
                 current=[current[0]+1,current[1]]
-                flag=checkConnect(color,current,flag,visited)
+                flag=self.checkConnect(color,current,flag,visited)
 
         if flag==False and current[1]>0 and [current[0],current[1]-1] not in  visited:         #LEFT
             visited.append(current)
-            if grid[current[0]][current[1]-1]==color*-1:
+            if self.grid[current[0]][current[1]-1]==color*-1:
                 flag=True
                 return flag
-            elif grid[current[0]][current[1]-1]==color:
+            elif self.grid[current[0]][current[1]-1]==color:
                 current=[current[0],current[1]-1]
-                flag=checkConnect(color,current,flag,visited)
+                flag=self.checkConnect(color,current,flag,visited)
 
                         
         if flag==False and current[1]<(self.cols-1) and [current[0],current[1]+1] not in visited:     #RIGHT
             visited.append(current)
-            if grid[current[0]][current[1]+1]==color*-1:
+            if self.grid[current[0]][current[1]+1]==color*-1:
                 flag=True
                 return flag            
-            elif grid[current[0]][current[1]+1]==color:
+            elif self.grid[current[0]][current[1]+1]==color:
                 current=[current[0],current[1]+1]
-                flag=checkConnect(color,current,flag,visited)
+                flag=self.checkConnect(color,current,flag,visited)
 
         return flag
-
-
+                
 
     def decode_action(self, action):
         color_idx = action % self.num_colors
         pos_idx = action // self.num_colors
-        x = pos_idx % self.grid_w
-        y = pos_idx // self.grid_w
+        x = pos_idx % self.cols
+        y = pos_idx // self.cols
         return x, y, color_idx
 
 
@@ -155,7 +164,7 @@ class ReplayBuffer:
 
 #//////////////////////////////CNN CODE////////////////////////////////
 
-class CNNDQN(nn.Module):
+class CNN(nn.Module):
     def __init__(self, in_channels, action_size, hidden_channels=64):
         super().__init__()
         self.encoder = nn.Sequential(
@@ -182,11 +191,12 @@ class CNNDQN(nn.Module):
         return out
 
 
-def train_cnn_dqn(
-    grid_size=6,
-    color_pairs=None,
+def train_dqn(
+    grid_size=5,
+    color_points=None,
+    colors=None,
     episodes=200,
-    max_steps_per_episode=200,
+    max_steps_per_episode=100,
     batch_size=64,
     gamma=0.99,
     lr=1e-3,
@@ -199,12 +209,12 @@ def train_cnn_dqn(
     save_path="cnn_dqn_checkpoint.pth"
 ):
     device = device or ("cuda" if torch.cuda.is_available() else "cpu")
-    env = PuzzleEnv(grid_size=grid_size, color_pairs=color_pairs, max_steps=max_steps_per_episode)
-    state_size = env.area  # flattened grid only
+    env = FLOW(grid_size=grid_size, colors=colors, color_points=color_points, max_steps=max_steps_per_episode)
+    in_channels = env.num_colors
     action_size = env.action_space
 
-    policy_net = DQN(state_size, action_size).to(device)
-    target_net = DQN(state_size, action_size).to(device)
+    policy_net = CNN(in_channels, action_size).to(device)
+    target_net = CNN(in_channels, action_size).to(device)
     target_net.load_state_dict(policy_net.state_dict())
     target_net.eval()
 
@@ -214,85 +224,91 @@ def train_cnn_dqn(
     epsilon = initial_epsilon
     total_steps = 0
 
-    for ep in range(1, episodes+1):
-        state = env.reset()
+    for ep in range(1, episodes + 1):
+        state = env.reset()  # C x H x W
         ep_reward = 0.0
 
         for t in range(max_steps_per_episode):
             total_steps += 1
-            st = torch.from_numpy(state).float().unsqueeze(0).to(device)
-
+            # select action (epsilon-greedy)
             if random.random() < epsilon:
+                print("RANDOM")
                 action = random.randrange(action_size)
+
             else:
+                st = torch.from_numpy(state).unsqueeze(0).to(device)  # 1 x C x H x W
                 with torch.no_grad():
-                    qvals = policy_net(st)
-                    action = int(torch.argmax(qvals, dim=1).item())
+                    q = policy_net(st)
+                    action = int(torch.argmax(q, dim=1).item())
 
             next_state, reward, done, info = env.step(action)
             ep_reward += reward
-
             replay.push(state, action, reward, next_state, float(done))
             state = next_state
 
-            # Learn
+            # learning step
             if len(replay) >= batch_size:
                 batch = replay.sample(batch_size)
-                states = torch.tensor(np.array(batch.state), dtype=torch.float32).to(device)
-                actions = torch.tensor(batch.action, dtype=torch.long).unsqueeze(1).to(device)
-                rewards = torch.tensor(batch.reward, dtype=torch.float32).unsqueeze(1).to(device)
-                next_states = torch.tensor(np.array(batch.next_state), dtype=torch.float32).to(device)
-                dones = torch.tensor(batch.done, dtype=torch.float32).unsqueeze(1).to(device)
+                states = np.stack(batch.state)       # B x C x H x W
+                next_states = np.stack(batch.next_state)
+                actions = np.array(batch.action, dtype=np.int64)
+                rewards = np.array(batch.reward, dtype=np.float32)
+                dones = np.array(batch.done, dtype=np.float32)
 
-                # Current Q-values
-                q_values = policy_net(states).gather(1, actions)
+                states_t = torch.from_numpy(states).to(device)
+                next_states_t = torch.from_numpy(next_states).to(device)
+                actions_t = torch.from_numpy(actions).long().unsqueeze(1).to(device)
+                rewards_t = torch.from_numpy(rewards).float().unsqueeze(1).to(device)
+                dones_t = torch.from_numpy(dones).float().unsqueeze(1).to(device)
 
-                # Next Q-values from target
+                # Q(s,a)
+                q_values = policy_net(states_t).gather(1, actions_t)
+
+                # target: r + gamma * max_a' Q_target(s', a') * (1-done)
                 with torch.no_grad():
-                    next_q_values = target_net(next_states).max(1)[0].unsqueeze(1)
-                    target_q = rewards + gamma * next_q_values * (1.0 - dones)
+                    max_next_q = target_net(next_states_t).max(1)[0].unsqueeze(1)
+                    target_q = rewards_t + gamma * max_next_q * (1.0 - dones_t)
 
                 loss = nn.MSELoss()(q_values, target_q)
 
                 optimizer.zero_grad()
                 loss.backward()
-                # gradient clipping for stability
                 torch.nn.utils.clip_grad_norm_(policy_net.parameters(), 1.0)
                 optimizer.step()
 
-            # Update target network periodically
-            if total_steps % target_update_freq == 0:
+            # update target network periodically
+            if total_steps % target_update_steps == 0:
                 target_net.load_state_dict(policy_net.state_dict())
 
             if done:
                 break
 
-        # Decay epsilon
         epsilon = max(min_epsilon, epsilon * epsilon_decay)
 
         if ep % 10 == 0 or ep == 1:
-            print(f"Episode {ep:4d} | steps {total_steps:6d} | ep_reward {ep_reward:6.1f} | epsilon {epsilon:.3f}")
+            print(f"Ep {ep:4d} | steps {total_steps:6d} | ep_reward {ep_reward:6.1f} | eps {epsilon:.3f}")
 
-        # Save checkpoint occasionally
+        # optional periodic save
         if ep % 100 == 0:
             torch.save({
                 'episode': ep,
-                'policy_state_dict': policy_net.state_dict(),
-                'target_state_dict': target_net.state_dict(),
-                'optimizer_state_dict': optimizer.state_dict(),
-                'epsilon': epsilon,
+                'policy_state': policy_net.state_dict(),
+                'target_state': target_net.state_dict(),
+                'optimizer': optimizer.state_dict(),
+                'epsilon': epsilon
             }, save_path)
 
     # final save
     torch.save({
         'episode': episodes,
-        'policy_state_dict': policy_net.state_dict(),
-        'target_state_dict': target_net.state_dict(),
-        'optimizer_state_dict': optimizer.state_dict(),
-        'epsilon': epsilon,
+        'policy_state': policy_net.state_dict(),
+        'target_state': target_net.state_dict(),
+        'optimizer': optimizer.state_dict(),
+        'epsilon': epsilon
     }, save_path)
-    print("Training finished. Model saved to", save_path)
+
     return policy_net, env
+
 
 # ------------- Save / Load helpers -------------
 def save_model(net, path):
@@ -308,11 +324,11 @@ def load_model(net_class, path, *args, device=None):
 # ------------- Example usage -------------
 if __name__ == "__main__":
     # small example color pairs for 5x5:
-    cp = [(0,0,4,4), (4,0,0,4)]  # two colors
-    policy, env = train_dqn(grid_size=5, color_pairs=cp, episodes=300, max_steps_per_episode=100)
+    cp = [[1,[0,0],[4,0]],[2,[0,4],[4,4]]]  # two colors
+    colors=[1,2]
+    policy, env = train_dqn(grid_size=5, colors=colors, color_points=cp, episodes=300, max_steps_per_episode=100)
     # test policy after training
     obs = env.reset()
-    env.render()
     done = False
     while not done:
         s = torch.from_numpy(obs).float().unsqueeze(0)
