@@ -1,27 +1,28 @@
 import numpy as np
 import random
 import colored
+import json 
 
 re = colored.attr('reset')
 na = 0    
-a = "A" 
-b = "B"  
-c = "C"   
-d = "D"
-e = "E"
-f = "F"
-g = "G"
-h = "H"
-i = "I"
-j = "J"
-k = "K"
-l = "L"
-m = "M"
-n = "N"
-o = "O"
+a = 1 
+b = 2  
+c = 3   
+d = 4
+e = 5
+f = 6
+g = 7
+h = 8
+i = 9
+j = 10
+k = 11
+l = 12
+m = 13
+n = 14
+o = 15
 dic = [a,b,c,d,e,f,g,h,i,j,k,l,m,n,o]
 
-n = 4                               #Grid dimension
+n = 5                               #Grid dimension
 chain_limit = 2                   #Minimum line length
 iter = 400                          #Number of iterations
 
@@ -72,46 +73,40 @@ def edgeSwitch(A):                  #Most important code of this generator: this
     return A
 
 
-
-def flowPrinter(A):                 #An auxiliary function for printing the puzzle
-    C = []                          #We make an empty list...
-    for z in range(n):
-        C.append([na]*n)            #... and fill it with n' sublists of 'n' entries whose content is a black double space ('na' is black, according to our color definition)
-    for i in range(len(A)):
-        for j in range(len(A[i])):              
-            x = A[i][j][0][0] - 1               #We find the indices of each line element...
-            y = A[i][j][0][1] - 1               
-            C[x][y] = A[i][j][1]                #... and overwrite that element in 'C' with the appropriate color
-    s = ""
-    for k in range(n):                          #Finally, we print every line of  'C' as a single string.
-        for l in range(n):
-            s = s + C[k][l]
-        print(s)
-        s = ""
 def flowPrinter_puzzle(A):
-    C = []
-    for z in range(n):
-        C.append([na]*n)
+    color_points=[]
+    colors=[]
     for i in range(len(A)):
-        for j in range(-1,1):
-            x = A[i][j][0][0] - 1
-            y = A[i][j][0][1] - 1
-            C[x][y] = A[i][j][1]
-    grid=[]
-    for k in range(n):
-        row=[]
-        for l in range(n):
-            row.append(C[k][l])
-        grid.append(row)
-    for i in grid:
-        print(i)
+        k=0
+        color=[]
 
+        for j in range(-1,1):
+            x = int(A[i][j][0][0] - 1)
+            y = int(A[i][j][0][1] - 1)
+            if A[i][j][1] not in  color:
+                color.append(A[i][j][1])
+            color.append([x,y])
+            k+=1
+        color_points.append(color)
+        colors.append(color[0])
+            
+    return(colors,color_points)
 
 
 flow = baseMatrix(n)
-for step in range(0,iter):
-    flow = edgeSwitch(flow)
-    random.shuffle(flow)
-flowPrinter(flow)
-print('\n \n')
-flowPrinter_puzzle(flow)
+puzzles=[]
+
+for i in range(200):
+    for step in range(0,iter):
+        flow = edgeSwitch(flow)
+        random.shuffle(flow)
+
+    colors,color_points=flowPrinter_puzzle(flow)
+    puzzles.append({"colors":colors,"color_points":color_points})
+
+with open("puzzles.jsonl", "w") as f:
+    for line in puzzles:
+        f.write(json.dumps(line) + "\n")
+    
+
+

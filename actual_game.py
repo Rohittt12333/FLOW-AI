@@ -4,20 +4,32 @@ from collections import deque, namedtuple
 import torch.nn as nn
 import torch.optim as optim
 import random
+import json
+
 class FLOW:
-    def __init__(self,grid_size,colors,color_points,max_steps=200):
+    def __init__(self,grid_size,max_steps=200):
+            self.puzzles = []
+            with open("puzzles.jsonl", "r") as f:
+                for line in f:
+                    self.puzzles.append(json.loads(line))
+
             self.size = grid_size
-            self.colors = colors
-            self.num_colors= len(colors)
-            self.color_points = color_points
+            self.colors = None
+            self.num_colors= grid_size
+            self.color_points = None
             self.rows = grid_size
             self.cols = grid_size
             self.area = self.rows * self.cols
-            self.action_space = self.area * len(self.colors)
+            self.action_space = self.area * self.num_colors
             self.max_steps = max_steps
             self.reset()
 
     def reset(self):
+        puzzle = random.choice(self.puzzles)
+        self.color_points = puzzle["color_points"]
+        self.colors=puzzle["colors"]
+        self.colors.sort()
+        print(puzzle["colors"])
         self.grid=np.array
         self.grid = np.zeros((self.rows, self.cols), dtype=np.int8)         
         for i in self.color_points:
@@ -33,6 +45,7 @@ class FLOW:
 
     def step(self, action):
         x, y,color_idx = self.decode_action(action)
+        colors = self.colors
         color = colors[color_idx]
         self.steps += 1
         reward = 0.0
@@ -209,7 +222,7 @@ def train_dqn(
     save_path="cnn_dqn_checkpoint.pth"
 ):
     device = device or ("cuda" if torch.cuda.is_available() else "cpu")
-    env = FLOW(grid_size=grid_size, colors=colors, color_points=color_points, max_steps=max_steps_per_episode)
+    env = FLOW(grid_size=grid_size, max_steps=max_steps_per_episode)
     in_channels = env.num_colors
     action_size = env.action_space
 
@@ -324,9 +337,7 @@ def load_model(net_class, path, *args, device=None):
 # ------------- Example usage -------------
 if __name__ == "__main__":
     # small example color pairs for 5x5:
-    cp = [[1,[0,0],[4,0]],[2,[0,4],[4,4]]]  # two colors
-    colors=[1,2]
-    policy, env = train_dqn(grid_size=5, colors=colors, color_points=cp, episodes=300, max_steps_per_episode=100)
+    policy, env = train_dqn(grid_size=5, episodes=200, max_steps_per_episode=100)
     # test policy after training
     obs = env.reset()
     done = False
@@ -335,7 +346,6 @@ if __name__ == "__main__":
         with torch.no_grad():
             act = int(torch.argmax(policy(s)).item())
         obs, r, done, info = env.step(act)
-        env.render()
         if done:
             print("Done:", info)
             break
