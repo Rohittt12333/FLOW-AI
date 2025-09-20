@@ -5,16 +5,14 @@ import torch.nn as nn
 import torch.optim as optim
 import random
 import json
+import os
 
 class FLOW:
     def __init__(self,grid_size,max_steps=200):
-            self.puzzles = []
-            with open("puzzles.jsonl", "r") as f:
-                for line in f:
-                    self.puzzles.append(json.loads(line))
-
+            self.valid = []
             self.size = grid_size
             self.colors = None
+            self.last_action = None
             self.num_colors= grid_size
             self.color_points = None
             self.rows = grid_size
@@ -22,14 +20,12 @@ class FLOW:
             self.area = self.rows * self.cols
             self.action_space = self.area * self.num_colors
             self.max_steps = max_steps
-            self.reset()
 
-    def reset(self):
-        puzzle = random.choice(self.puzzles)
+
+    def reset(self,puzzle):
         self.color_points = puzzle["color_points"]
-        self.colors=puzzle["colors"]
+        self.colors = puzzle["colors"]
         self.colors.sort()
-        print(puzzle["colors"])
         self.grid=np.array
         self.grid = np.zeros((self.rows, self.cols), dtype=np.int8)         
         for i in self.color_points:
@@ -37,7 +33,8 @@ class FLOW:
         for i in self.color_points:
             self.grid[i[2][0]][i[2][1]]=i[0]*-1
 
-        print(self.grid)
+        #print(self.grid)
+        self.valid = self.valid_actions()        
         self.steps = 0
         self.solved=0
         return self.get_observation()
@@ -48,29 +45,33 @@ class FLOW:
         colors = self.colors
         color = colors[color_idx]
         self.steps += 1
-        reward = 0.0
+        reward = -0.2
         done = False
         info = {}
         count=0
         if self.grid[y,x] < 0:                                  #FIXED POINT OVERWRITE ATTEMPT
             reward = -5.0
-            print("OVERWRITE FIXED")
+            #print("OVERWRITE FIXED")
                 
-        elif self.grid[y, x] == color:                                    #REPEATED PLACEMENT
-            reward = -0.2
-            print("REPEAT")
-            
-        elif self.grid[y, x] == 0:                                      #VALID
-            self.grid[y, x] = color
-            reward = 2.0
-            print("VALID")
-            
-        else:                                                           #OVERWRITE DOT
-            self.grid[y, x] = color
+        elif self.grid[y, x] == color:                          #REPEATED PLACEMENT
+            reward = -1.0
+            #print("REPEAT")
+
+        elif action == self.last_action:                        #ACTION REPEAT
             reward = -3.0
-            print("OVERWRITE DOT")
-        print(y,x,color)
-        print(self.grid)
+            
+        elif self.grid[y, x] == 0:                              #VALID
+            self.grid[y, x] = color
+            reward = 5.0
+            #print("VALID")
+            
+        else:                                                   #OVERWRITE DOT
+            self.grid[y, x] = color
+            reward = -2.0
+            #print("OVERWRITE DOT")
+        #print(y,x,color)
+        #print(self.grid)
+        self.last_action = action
 
         for i in  self.color_points:
             if self.checkConnect(i[0],i[1],False)==True:
@@ -154,6 +155,16 @@ class FLOW:
         y = pos_idx // self.cols
         return x, y, color_idx
 
+    def valid_actions(self):
+        valid = []
+        for a in range(self.action_space):
+            x, y, color = self.decode_action(a)
+            val = self.grid[y, x]
+            if val >= 0:
+                valid.append(a)
+        return valid
+
+
 
 
 # ------------- Replay Buffer -------------
@@ -208,18 +219,17 @@ def train_dqn(
     grid_size=5,
     color_points=None,
     colors=None,
-    episodes=200,
+    episodes=100,
     max_steps_per_episode=100,
     batch_size=64,
     gamma=0.99,
     lr=1e-3,
     replay_capacity=20000,
     initial_epsilon=1.0,
-    min_epsilon=0.05,
+    min_epsilon=0.1,
     epsilon_decay=0.995,
     target_update_steps=1000,
     device=None,
-    save_path="cnn_dqn_checkpoint.pth"
 ):
     device = device or ("cuda" if torch.cuda.is_available() else "cpu")
     env = FLOW(grid_size=grid_size, max_steps=max_steps_per_episode)
@@ -236,23 +246,42 @@ def train_dqn(
 
     epsilon = initial_epsilon
     total_steps = 0
+    puzzles = []
+    with open("puzzles.jsonl", "r") as f:
+        for line in f:
+            puzzles.append(json.loads(line))
+    puzzle = random.choice(puzzles)
 
+    start_episode = load_checkpoint(policy_net, optimizer)
     for ep in range(1, episodes + 1):
-        state = env.reset()  # C x H x W
+      
+        if episodes>2500 and episodes%50 == 0:
+            puzzle = random.choice(puzzles)
+
+        elif episodes>1000 and episodes%100 == 0:
+            puzzle = random.choice(puzzles)
+      
+        elif episodes%250 == 0:
+            puzzle = random.choice(puzzles)
+        state = env.reset(puzzle)  # C x H x W
         ep_reward = 0.0
 
         for t in range(max_steps_per_episode):
             total_steps += 1
             # select action (epsilon-greedy)
             if random.random() < epsilon:
-                print("RANDOM")
-                action = random.randrange(action_size)
+                #print("RANDOM")
+                action = random.choice(env.valid)
 
             else:
-                st = torch.from_numpy(state).unsqueeze(0).to(device)  # 1 x C x H x W
+                st = torch.from_numpy(state).unsqueeze(0).to(device)
                 with torch.no_grad():
-                    q = policy_net(st)
-                    action = int(torch.argmax(q, dim=1).item())
+                    q = policy_net(st).squeeze(0)
+                    mask = torch.full_like(q, -float("inf"))  # start with -inf everywhere
+                    mask[env.valid] = q[env.valid]                    # keep only valid actions
+
+                    action = int(torch.argmax(mask).item())
+
 
             next_state, reward, done, info = env.step(action)
             ep_reward += reward
@@ -297,47 +326,41 @@ def train_dqn(
                 break
 
         epsilon = max(min_epsilon, epsilon * epsilon_decay)
+        if ep % 500 == 0:
+            save_checkpoint(policy_net, optimizer, ep)
+        print(f"Ep {ep:4d} | steps {total_steps:6d} | ep_reward {ep_reward:6.1f} | eps {epsilon:.3f}")
 
-        if ep % 10 == 0 or ep == 1:
-            print(f"Ep {ep:4d} | steps {total_steps:6d} | ep_reward {ep_reward:6.1f} | eps {epsilon:.3f}")
-
-        # optional periodic save
-        if ep % 100 == 0:
-            torch.save({
-                'episode': ep,
-                'policy_state': policy_net.state_dict(),
-                'target_state': target_net.state_dict(),
-                'optimizer': optimizer.state_dict(),
-                'epsilon': epsilon
-            }, save_path)
-
-    # final save
-    torch.save({
-        'episode': episodes,
-        'policy_state': policy_net.state_dict(),
-        'target_state': target_net.state_dict(),
-        'optimizer': optimizer.state_dict(),
-        'epsilon': epsilon
-    }, save_path)
-
-    return policy_net, env
 
 
 # ------------- Save / Load helpers -------------
-def save_model(net, path):
-    torch.save(net.state_dict(), path)
+CHECKPOINT_DIR = "checkpoints"
+os.makedirs(CHECKPOINT_DIR, exist_ok=True)
 
-def load_model(net_class, path, *args, device=None):
-    device = device or ("cuda" if torch.cuda.is_available() else "cpu")
-    net = net_class(*args).to(device)
-    net.load_state_dict(torch.load(path, map_location=device))
-    net.eval()
-    return net
+def save_checkpoint(policy_net, optimizer, episode, filename="checkpoint.pth"):
+    path = os.path.join(CHECKPOINT_DIR, filename)
+    torch.save({
+        "episode": episode,
+        "model_state": policy_net.state_dict(),
+        "optimizer_state": optimizer.state_dict()
+    }, path)
+    print(f"✅ Saved checkpoint at episode {episode}")
+
+
+def load_checkpoint(policy_net, optimizer, filename="checkpoint.pth"):
+    path = os.path.join(CHECKPOINT_DIR, filename)
+    if os.path.exists(path):
+        checkpoint = torch.load(path)
+        policy_net.load_state_dict(checkpoint["model_state"])
+        optimizer.load_state_dict(checkpoint["optimizer_state"])
+        start_episode = checkpoint["episode"] + 1
+        print(f"🔄 Resuming from episode {start_episode}")
+        return start_episode
+    return 1
 
 # ------------- Example usage -------------
 if __name__ == "__main__":
     # small example color pairs for 5x5:
-    policy, env = train_dqn(grid_size=5, episodes=200, max_steps_per_episode=100)
+    policy, env = train_dqn(grid_size=5, episodes=5000, max_steps_per_episode=100)
     # test policy after training
     obs = env.reset()
     done = False

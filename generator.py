@@ -96,7 +96,7 @@ def flowPrinter_puzzle(A):
 flow = baseMatrix(n)
 puzzles=[]
 
-for i in range(200):
+for i in range(600):
     for step in range(0,iter):
         flow = edgeSwitch(flow)
         random.shuffle(flow)
