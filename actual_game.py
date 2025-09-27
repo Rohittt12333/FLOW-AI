@@ -6,6 +6,9 @@ import torch.optim as optim
 import random
 import json
 import os
+import pickle
+import csv
+
 
 class FLOW:
     def __init__(self,grid_size,max_steps=200):
@@ -20,23 +23,25 @@ class FLOW:
             self.area = self.rows * self.cols
             self.action_space = self.area * self.num_colors
             self.max_steps = max_steps
-
+            self.manhattan={}
 
     def reset(self,puzzle):
         self.color_points = puzzle["color_points"]
         self.colors = puzzle["colors"]
+        self.puzzle_no = puzzle["puzzle_no"]
         self.colors.sort()
         self.grid=np.array
         self.grid = np.zeros((self.rows, self.cols), dtype=np.int8)         
         for i in self.color_points:
-            self.grid[i[1][0]][i[1][1]]=i[0]*-1            #color_points = [[color,[start_x,start_y],[end_x,end_y]]]
+            self.grid[i[1][0]][i[1][1]]=i[0]*-1                         #color_points = [[color,[start_x,start_y],[end_x,end_y]]]
         for i in self.color_points:
             self.grid[i[2][0]][i[2][1]]=i[0]*-1
-
+            self.manhattan[i[0]]=abs(i[1][0]-i[2][0])+abs(i[1][1]-i[2][1])      #manhattan={"color":man_distance} 
         #print(self.grid)
         self.valid = self.valid_actions()        
         self.steps = 0
-        self.solved=0
+        self.total_connected = 0
+        self.solved = 0
         return self.get_observation()
 
 
@@ -50,43 +55,71 @@ class FLOW:
         info = {}
         count=0
         if self.grid[y,x] < 0:                                  #FIXED POINT OVERWRITE ATTEMPT
-            reward = -5.0
-            #print("OVERWRITE FIXED")
+            reward += -5.0
+            print("OVERWRITE FIXED")
                 
         elif self.grid[y, x] == color:                          #REPEATED PLACEMENT
-            reward = -1.0
+            reward += -1.0
             #print("REPEAT")
 
         elif action == self.last_action:                        #ACTION REPEAT
-            reward = -3.0
+            reward += -3.0
             
         elif self.grid[y, x] == 0:                              #VALID
             self.grid[y, x] = color
-            reward = 5.0
+            reward += 10.0
+            flag,i=self.checkConnect(color,[y,x],False)
+            if flag==True:
+                for i in self.color_points:
+                    if i[0]==color:
+                        distance = max(abs(i[1][0]-y)+abs(i[1][1]-x),abs(i[2][0]-y)+abs(i[2][1]-x))
+                        if self.manhattan[color]>distance:
+                            reward += (self.manhattan[color]-distance)*2
+                            break
+                self.manhattan[color] = distance
             #print("VALID")
             
         else:                                                   #OVERWRITE DOT
             self.grid[y, x] = color
-            reward = -2.0
+            reward += -1.0
+            flag,i=self.checkConnect(color,[y,x],False)
+            if flag==True:
+                for i in self.color_points:
+                    if i[0]==color:
+                        distance = max(abs(i[1][0]+i[1][1]-x-y),abs(i[2][0]+i[2][1]-x-y))
+                        if self.manhattan[color]>distance:
+                            reward += (self.manhattan[color]-distance)*2
+                            break
+                self.manhattan[color] = distance                
             #print("OVERWRITE DOT")
         #print(y,x,color)
         #print(self.grid)
         self.last_action = action
-
+        connected_cols=0
+        total_conn = 0
         for i in  self.color_points:
-            if self.checkConnect(i[0],i[1],False)==True:
+            flag, path_len = self.checkConnect(i[0],i[1],False)
+            connected_cols += path_len
+            flag, path_len = self.checkConnect(i[0],i[2],False)
+            connected_cols += path_len
+            if connected_cols > 10:
+                connected_cols = 10 - connected_cols
+            total_conn += min(7,connected_cols)
+            if flag==True:
+                self.manhattan[i[0]]=0
                 count+=1
-                
+
         if count==len(colors):                                          #REWARD FOR FULL SOLUTION
             info['solved'] = True
+            print("SOLVED")
             done=True
-            reward += 50.0
+            reward += 200.0
             
         else:                                                           #REWARD FOR SOLVED COLORS
             reward += (count - self.solved)*5
-            
+        reward += (total_conn - self.total_connected)*2                 #REWARD FOR CONNECTED DOTS
+        self.total_connected = total_conn
         self.solved = count
-
         if self.steps >= self.max_steps:
             done = True
             info['solved'] = False
@@ -105,47 +138,52 @@ class FLOW:
 
     def checkConnect(self,color,current,flag,visited=None):
         if visited is None:
+            i=0
             visited = []
+            visited.append(current)
             
         if flag==False and current[0]>0 and [current[0]-1,current[1]] not in visited:      #UP
-            visited.append(current)
             if self.grid[current[0]-1][current[1]]==color*-1:
                 flag=True
-                return flag
+                return flag,len(visited)
             elif self.grid[current[0]-1][current[1]]==color:
                 current=[current[0]-1,current[1]]
-                flag=self.checkConnect(color,current,flag,visited)
+                visited.append(current)
+                flag,i=self.checkConnect(color,current,flag,visited)
+                current=[current[0]+1,current[1]]
             
                 
         if flag==False and current[0]<(self.rows-1) and [current[0]+1,current[1]] not in visited:     #DOWN
-            visited.append(current)
             if self.grid[current[0]+1][current[1]]==color*-1:
                 flag=True
-                return flag            
+                return flag,len(visited)            
             elif self.grid[current[0]+1][current[1]]==color:
                 current=[current[0]+1,current[1]]
-                flag=self.checkConnect(color,current,flag,visited)
+                visited.append(current)
+                flag,i=self.checkConnect(color,current,flag,visited)
+                current=[current[0]-1,current[1]]
+
 
         if flag==False and current[1]>0 and [current[0],current[1]-1] not in  visited:         #LEFT
-            visited.append(current)
             if self.grid[current[0]][current[1]-1]==color*-1:
-                flag=True
-                return flag
+                flag=True               
+                return flag,len(visited)
             elif self.grid[current[0]][current[1]-1]==color:
                 current=[current[0],current[1]-1]
-                flag=self.checkConnect(color,current,flag,visited)
-
+                visited.append(current)                
+                flag,i=self.checkConnect(color,current,flag,visited)
+                current=[current[0],current[1]+1]
                         
         if flag==False and current[1]<(self.cols-1) and [current[0],current[1]+1] not in visited:     #RIGHT
-            visited.append(current)
             if self.grid[current[0]][current[1]+1]==color*-1:
-                flag=True
-                return flag            
+                flag=True                
+                return flag,len(visited)            
             elif self.grid[current[0]][current[1]+1]==color:
                 current=[current[0],current[1]+1]
-                flag=self.checkConnect(color,current,flag,visited)
-
-        return flag
+                visited.append(current)
+                flag,i=self.checkConnect(color,current,flag,visited)
+                current=[current[0],current[1]-1]
+        return flag,len(visited)
                 
 
     def decode_action(self, action):
@@ -183,6 +221,15 @@ class ReplayBuffer:
 
     def __len__(self):
         return len(self.buffer)
+
+def warmup_replay(env, replay, puzzle, n_steps=2000):
+    state = env.reset(puzzle)
+    for _ in range(n_steps):
+        valid = env.valid_actions()
+        action = random.choice(valid)
+        next_s, r, done, _ = env.step(action)
+        replay.push(state, action, r, next_s, float(done))
+        state = next_s if not done else env.reset(puzzle)
 
 
 
@@ -223,13 +270,14 @@ def train_dqn(
     max_steps_per_episode=100,
     batch_size=64,
     gamma=0.99,
-    lr=1e-3,
+    lr=1e-4,
     replay_capacity=20000,
     initial_epsilon=1.0,
     min_epsilon=0.1,
     epsilon_decay=0.995,
     target_update_steps=1000,
     device=None,
+    start_episodes=0
 ):
     device = device or ("cuda" if torch.cuda.is_available() else "cpu")
     env = FLOW(grid_size=grid_size, max_steps=max_steps_per_episode)
@@ -244,24 +292,27 @@ def train_dqn(
     optimizer = optim.Adam(policy_net.parameters(), lr=lr)
     replay = ReplayBuffer(capacity=replay_capacity)
 
-    epsilon = initial_epsilon
     total_steps = 0
     puzzles = []
     with open("puzzles.jsonl", "r") as f:
         for line in f:
             puzzles.append(json.loads(line))
     puzzle = random.choice(puzzles)
+    warmup_replay(env, replay, puzzle, n_steps=2000)
+    start_episode, epsilon, replay = load_checkpoint(policy_net, target_net, optimizer, replay)
+    losses=[]
+    q_means=[]
+    q_maxs=[]
 
-    start_episode = load_checkpoint(policy_net, optimizer)
-    for ep in range(1, episodes + 1):
+    for ep in range(start_episode, episodes + 1):
       
-        if episodes>2500 and episodes%50 == 0:
+        if ep>2500 and ep%50 == 0:
             puzzle = random.choice(puzzles)
 
-        elif episodes>1000 and episodes%100 == 0:
+        elif ep>1000 and ep%100 == 0:
             puzzle = random.choice(puzzles)
       
-        elif episodes%250 == 0:
+        elif ep%250 == 0:
             puzzle = random.choice(puzzles)
         state = env.reset(puzzle)  # C x H x W
         ep_reward = 0.0
@@ -281,6 +332,11 @@ def train_dqn(
                     mask[env.valid] = q[env.valid]                    # keep only valid actions
 
                     action = int(torch.argmax(mask).item())
+                    q_mean = q.mean().item()
+                    q_max = q.max().item()
+                    q_means.append(q_mean)
+                    q_maxs.append(q_max)
+
 
 
             next_state, reward, done, info = env.step(action)
@@ -311,7 +367,10 @@ def train_dqn(
                     max_next_q = target_net(next_states_t).max(1)[0].unsqueeze(1)
                     target_q = rewards_t + gamma * max_next_q * (1.0 - dones_t)
 
-                loss = nn.MSELoss()(q_values, target_q)
+                loss = nn.SmoothL1Loss()(q_values, target_q)
+                loss_value = loss.item()
+                losses.append(loss_value)   # keep a list or deque of recent losses
+               
 
                 optimizer.zero_grad()
                 loss.backward()
@@ -326,36 +385,84 @@ def train_dqn(
                 break
 
         epsilon = max(min_epsilon, epsilon * epsilon_decay)
-        if ep % 500 == 0:
-            save_checkpoint(policy_net, optimizer, ep)
-        print(f"Ep {ep:4d} | steps {total_steps:6d} | ep_reward {ep_reward:6.1f} | eps {epsilon:.3f}")
 
+
+        if ep % 100 == 0:
+            avg_loss = np.mean(losses[-100:]) if losses else 0.0
+            avg_q_mean = np.mean(q_means[-100:]) if q_means else 0.0
+            avg_q_max = np.mean(q_maxs[-100:]) if q_maxs else 0.0
+            with open("log.csv",mode="a",newline="", encoding="utf-8") as logs:
+                writer=csv.writer(logs)
+                writer.writerow([avg_loss,avg_q_mean,avg_q_max])
+
+        if ep % 500 == 0:
+            save_checkpoint(policy_net, target_net, optimizer, replay, ep, epsilon)
+        print(f"Ep {ep:4d} | steps {total_steps:6d} | ep_reward {ep_reward:6.1f} | eps {epsilon:.3f} | Puzzle_No {env.puzzle_no:4d}")
+    return policy_net,env
 
 
 # ------------- Save / Load helpers -------------
-CHECKPOINT_DIR = "checkpoints"
-os.makedirs(CHECKPOINT_DIR, exist_ok=True)
-
 def save_checkpoint(policy_net, optimizer, episode, filename="checkpoint.pth"):
-    path = os.path.join(CHECKPOINT_DIR, filename)
-    torch.save({
-        "episode": episode,
-        "model_state": policy_net.state_dict(),
-        "optimizer_state": optimizer.state_dict()
-    }, path)
+    path = os.path.join("checkpoints", filename)
+    checkpoint = {
+        'episode': episode,
+        'policy_state': policy_net.state_dict(),
+        'target_state': target_net.state_dict(),
+        'optimizer': optimizer.state_dict(),
+        'epsilon': epsilon,
+        'replay_buffer': replay.buffer
+        }
+    with open(path, "wb") as f:
+        pickle.dump(checkpoint, f)
+    print(f"✅ Saved checkpoint at episode {episode}")
+
+def load_checkpoint(policy_net, optimizer, filename="checkpoint.pth"):
+    path = os.path.join("checkpoints", filename)
+    if os.path.exists(path):
+        with open(path, "rb") as f:
+            checkpoint = pickle.load(f)
+
+        policy_net.load_state_dict(checkpoint['policy_state'])
+        target_net.load_state_dict(checkpoint['target_state'])
+        optimizer.load_state_dict(checkpoint['optimizer'])
+        epsilon = checkpoint.get('epsilon',1.0)
+        replay.buffer = checkpoint['replay_buffer']
+        start_episode = checkpoint['episode'] + 1
+        print(f"🔄 Resuming from episode {start_episode}")
+        return start_episode,epsilon
+    return 1,1.0
+
+def save_checkpoint(policy_net, target_net, optimizer, replay, episode, epsilon, filename="checkpoint.pth"):
+    os.makedirs("checkpoints", exist_ok=True)
+    path = os.path.join("checkpoints", filename)
+    checkpoint = {
+        'episode': episode,
+        'policy_state': policy_net.state_dict(),
+        'target_state': target_net.state_dict(),
+        'optimizer': optimizer.state_dict(),
+        'epsilon': epsilon,
+        'replay_buffer': replay.buffer 
+    }
+    with open(path, "wb") as f:
+        pickle.dump(checkpoint, f)
     print(f"✅ Saved checkpoint at episode {episode}")
 
 
-def load_checkpoint(policy_net, optimizer, filename="checkpoint.pth"):
-    path = os.path.join(CHECKPOINT_DIR, filename)
+def load_checkpoint(policy_net, target_net, optimizer, replay, filename="checkpoint.pth"):
+    path = os.path.join("checkpoints", filename)
     if os.path.exists(path):
-        checkpoint = torch.load(path)
-        policy_net.load_state_dict(checkpoint["model_state"])
-        optimizer.load_state_dict(checkpoint["optimizer_state"])
-        start_episode = checkpoint["episode"] + 1
+        with open(path, "rb") as f:
+            checkpoint = pickle.load(f)
+
+        policy_net.load_state_dict(checkpoint['policy_state'])
+        target_net.load_state_dict(checkpoint['target_state'])
+        optimizer.load_state_dict(checkpoint['optimizer'])
+        epsilon = checkpoint.get('epsilon', 1.0)
+        replay.buffer = checkpoint['replay_buffer']
+        start_episode = checkpoint['episode'] + 1
         print(f"🔄 Resuming from episode {start_episode}")
-        return start_episode
-    return 1
+        return start_episode, epsilon, replay
+    return 1, 1.0, replay
 
 # ------------- Example usage -------------
 if __name__ == "__main__":

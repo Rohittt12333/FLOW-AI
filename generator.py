@@ -102,7 +102,7 @@ for i in range(600):
         random.shuffle(flow)
 
     colors,color_points=flowPrinter_puzzle(flow)
-    puzzles.append({"colors":colors,"color_points":color_points})
+    puzzles.append({"colors":colors,"color_points":color_points,"puzzle_no":i})
 
 with open("puzzles.jsonl", "w") as f:
     for line in puzzles:
